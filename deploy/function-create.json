@@ -1,0 +1,24 @@
+{
+  "targetSpec": {
+    "name": "{{NAME}}",
+    "region": "{{REGION}}",
+    "template": {
+      "function": {
+        "runtime": "python3.12",
+        "entrypoint": "main",
+        "source": {
+          "sourceOrigin": "REPO",
+          "repository": { "url": "{{REPO_URL}}", "ref": "{{REF}}" }
+        },
+        "env": [
+          { "name": "SUMMIT_RELEASE", "value": "{{RELEASE}}" },
+          { "name": "SUMMIT_NAME", "value": "Carrousel du Louvre" }
+        ],
+        "resources": { "cpu": 1, "memory": 512 }
+      }
+    },
+    "scaling": { "mode": "AUTO", "minInstances": 0, "maxInstances": 5, "concurrencyTarget": 20, "idleTimeoutSeconds": 60 },
+    "traffic": [ { "latest": true, "weight": 100 } ],
+    "rollbackErrorThreshold": {{THRESHOLD}}
+  }
+}

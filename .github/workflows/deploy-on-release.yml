@@ -1,0 +1,97 @@
+# Deploys a published release of this repository to OVHcloud Serverless as a
+# canary: the release tag becomes the source ref of a new revision that gets
+# SLS_CANARY_PERCENT % of traffic (default 10), and the platform rolls it back
+# on its own when its error rate passes SLS_ROLLBACK_THRESHOLD % (default 5).
+# The first release ever creates the function at 100 %.
+#
+# The platform does not watch the repository (repositories are referenced, not
+# connected): this workflow is the customer's CI calling the deploy API.
+# Disabled by default: set the repository variable SLS_DEPLOY_ENABLED to "true".
+#
+# Variables: OVH_CLOUD_PROJECT, optionally SLS_REGION, SLS_FUNCTION_NAME,
+#            SLS_CANARY_PERCENT, SLS_ROLLBACK_THRESHOLD.
+# Secrets:   OVH_ENDPOINT and ONE credential set: OVH_APPLICATION_KEY,
+#            OVH_APPLICATION_SECRET, OVH_CONSUMER_KEY (classic API keys) or
+#            OVH_CLIENT_ID, OVH_CLIENT_SECRET (OAuth2 service account).
+name: deploy-on-release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to deploy (for example v2)
+        required: true
+      mode:
+        description: canary or full
+        default: canary
+
+concurrency:
+  group: deploy-function
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: vars.SLS_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      MODE: ${{ inputs.mode || 'canary' }}
+      FUNCTION_NAME: ${{ vars.SLS_FUNCTION_NAME || 'demo-summit-guide' }}
+      OVH_CLOUD_PROJECT: ${{ vars.OVH_CLOUD_PROJECT }}
+      SLS_REGION: ${{ vars.SLS_REGION || 'EU-WEST-PAR' }}
+      REPO_URL: https://github.com/${{ github.repository }}
+    steps:
+      # Scripts come from the default branch; the platform builds the tag.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Fetch the shared deploy tooling from podinfo-sls
+        uses: actions/checkout@v4
+        with:
+          repository: antonin-a/podinfo-sls
+          path: podinfo-sls
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ovh
+
+      - name: Write ovh.conf (API keys or service account)
+        env:
+          OVH_ENDPOINT: ${{ secrets.OVH_ENDPOINT }}
+          OVH_APPLICATION_KEY: ${{ secrets.OVH_APPLICATION_KEY }}
+          OVH_APPLICATION_SECRET: ${{ secrets.OVH_APPLICATION_SECRET }}
+          OVH_CONSUMER_KEY: ${{ secrets.OVH_CONSUMER_KEY }}
+          OVH_CLIENT_ID: ${{ secrets.OVH_CLIENT_ID }}
+          OVH_CLIENT_SECRET: ${{ secrets.OVH_CLIENT_SECRET }}
+        run: scripts/write-ovh-conf.sh "$HOME/.ovh.conf"
+
+      - name: Deploy ${{ env.TAG }} (${{ env.MODE }})
+        id: deploy
+        env:
+          PODINFO_TOOLS: podinfo-sls/tools
+        run: |
+          if [ "$MODE" = "full" ]; then flag="--full"; else flag="--canary ${{ vars.SLS_CANARY_PERCENT || '10' }}"; fi
+          scripts/release-deploy.sh "$TAG" $flag --threshold "${{ vars.SLS_ROLLBACK_THRESHOLD || '5' }}"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${FUNCTION_NAME} · release ${TAG} (${MODE})"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| URL | ${{ steps.deploy.outputs.SLS_URL }} |"
+            echo "| Revision | ${{ steps.deploy.outputs.SLS_REVISION }} |"
+            echo "| Deploy time | ${{ steps.deploy.outputs.SLS_ELAPSED }} s |"
+            echo ""
+            echo "A canary is promoted from the console (Revisions, Promote) or with scripts/traffic.sh promote."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove credentials
+        if: always()
+        run: rm -f "$HOME/.ovh.conf"
