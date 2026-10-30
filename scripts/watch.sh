@@ -13,8 +13,10 @@ end=$(( $(date +%s) + dur )); total=0
 tmp="$(mktemp)"; trap 'rm -f "$tmp"; echo' EXIT
 while (( $(date +%s) < end )); do
   for _ in $(seq 1 "$rate"); do
-    { out="$(curl -s -m 10 -w '\n%{http_code}' "$url" || printf '\n000')"
+    { rc=0; out="$(curl -s -m 10 -w '\n%{http_code}' "$url")" || rc=$?
       code="${out##*$'\n'}"; body="${out%$'\n'*}"
+      # No HTTP answer: tell a 10 s timeout from a refused or cut connection.
+      case "$rc" in 0) ;; 28) code="timeout" ;; *) code="curl-error-$rc" ;; esac
       rel="$(jq -r '.release // "?"' <<<"$body" 2>/dev/null || echo "?")"
       echo "$code $rel" >> "$tmp"; } &
   done
