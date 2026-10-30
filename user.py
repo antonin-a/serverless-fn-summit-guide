@@ -26,6 +26,16 @@ FEED = "https://velib-metropole-opendata.smovengo.cloud/opendata/Velib_Metropole
 INFO_URL = FEED + "/station_information.json"
 STATUS_URL = FEED + "/station_status.json"
 
+# Station information (names, positions) barely changes: keep it for an hour.
+# Station status (bikes, docks) changes all the time: keep it 30 seconds.
+# The cache lives in the instance: warm calls reuse it, a cold start empties it.
+INFO_TTL = 3600
+STATUS_TTL = 30
+_cache: dict = {}
+
+# Walking speed used for the "minutes on foot" estimate, in metres per minute.
+WALK_M_PER_MIN = 75
+
 _STARTED_AT = time.monotonic()
 _CALLS = 0
 
@@ -45,8 +55,41 @@ def _get_json(url: str) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _cached(url: str, ttl: int) -> tuple[dict, str]:
+    """Returns (payload, "hit" or "miss") from the in-instance cache."""
+    now = time.monotonic()
+    entry = _cache.get(url)
+    if entry and now - entry[0] < ttl:
+        return entry[1], "hit"
+    payload = _get_json(url)
+    _cache[url] = (now, payload)
+    return payload, "miss"
+
+
+def _bike_types(status: dict) -> dict:
+    """GBFS gives a list of single-key dicts: [{"mechanical": 20}, {"ebike": 1}]."""
+    types = {"mechanical": 0, "ebike": 0}
+    for item in status.get("num_bikes_available_types") or []:
+        for kind, count in item.items():
+            types[kind] = types.get(kind, 0) + count
+    return types
+
+
 def _plural(n: int, one: str, many: str) -> str:
     return f"{n} {one if n <= 1 else many}"
+
+
+def _recommend(stations: list) -> str:
+    take = next((s for s in stations if (s["bikes"] or 0) > 0), None)
+    drop = max(stations, key=lambda s: s["docks"] or 0)
+    parts = []
+    if take:
+        parts.append(f"Pour prendre un vélo : {take['name']}, à {take['walkMinutes']} min à pied")
+    if drop and (drop["docks"] or 0) > 0:
+        left = drop["docks"]
+        note = _plural(left, "place", "places") + (", dépêchez-vous" if left <= 2 else "")
+        parts.append(f"pour le rendre : {drop['name']} ({note})")
+    return " ; ".join(parts) + "." if parts else "Aucun vélo disponible autour du Summit pour le moment."
 
 
 def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -65,18 +108,23 @@ def _guide() -> dict:
     lon = float(_env("SUMMIT_LON", "2.33431"))
 
     t0 = time.monotonic()
-    info = _get_json(INFO_URL)["data"]["stations"]
-    status = {s["station_id"]: s for s in _get_json(STATUS_URL)["data"]["stations"]}
+    info_payload, info_cache = _cached(INFO_URL, INFO_TTL)
+    status_payload, status_cache = _cached(STATUS_URL, STATUS_TTL)
+    info = info_payload["data"]["stations"]
+    status = {s["station_id"]: s for s in status_payload["data"]["stations"]}
     fetch_ms = round((time.monotonic() - t0) * 1000)
 
     nearest = sorted(info, key=lambda s: _distance_m(lat, lon, s["lat"], s["lon"]))[:3]
     stations = []
     for s in nearest:
         st = status.get(s["station_id"], {})
+        distance = round(_distance_m(lat, lon, s["lat"], s["lon"]))
         stations.append({
             "name": s["name"],
-            "distanceM": round(_distance_m(lat, lon, s["lat"], s["lon"])),
+            "distanceM": distance,
+            "walkMinutes": max(1, round(distance / WALK_M_PER_MIN)),
             "bikes": st.get("num_bikes_available"),
+            "bikeTypes": _bike_types(st),
             "docks": st.get("num_docks_available"),
         })
 
@@ -84,8 +132,10 @@ def _guide() -> dict:
     return {
         "release": _env("SUMMIT_RELEASE", "dev"),
         "place": _env("SUMMIT_NAME", "Carrousel du Louvre"),
+        "recommendation": _recommend(stations),
         "stations": stations,
         "source": "Velib' Metropole open data (GBFS)",
+        "cache": {"stationInformation": info_cache, "stationStatus": status_cache},
         "fetchMs": fetch_ms,
         "durationMs": round((time.monotonic() - started) * 1000),
         "instance": {
