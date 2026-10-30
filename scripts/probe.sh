@@ -9,9 +9,13 @@
 set -euo pipefail
 url="${1:?usage: probe.sh <url> [calls]}"; n="${2:-10}"
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
+# The function answers a page that embeds its data, or JSON (?format=json).
+page_data() { sed -n -e 's/.*<script type="application\/json" id="data">\(.*\)<\/script>.*/\1/p' -e t -e '/^{/p'; }
 r="$(mktemp)"; trap 'rm -f "$r"' EXIT
 for _ in $(seq 1 "$n"); do
   t="$(curl -s -m 15 -o "$r" -w '%{http_code} %{time_total}' "$url" || echo "000 15")"
   printf '%-4s client %6.0f ms   ' "${t%% *}" "$(awk '{print $2 * 1000}' <<<"$t")"
-  jq -r '"Velib fetch \(.fetchMs) ms   cache \(.cache.stationStatus // "none")   \(.release)"' "$r" 2>/dev/null || echo "(no JSON answer)"
+  d="$(page_data < "$r")"
+  if [[ -n "$d" ]]; then jq -r '"Velib fetch \(.fetchMs) ms   cache \(.cache.stationStatus // "none")   \(.release)"' <<<"$d"
+  else echo "no data in the answer (function error)"; fi
 done

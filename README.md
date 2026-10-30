@@ -3,14 +3,15 @@
 A Python 3.12 function for the OVHcloud Serverless alpha demo: the three
 Velib' stations nearest to the Carrousel du Louvre (OVHcloud Summit), live
 from the Velib' Metropole open data feed. No key, no dependency. The handler
-is `main` in `user.py`, it takes no argument and returns JSON.
+is `main` in `user.py`, it takes no argument and returns a small web page
+(add `?format=json` for the raw data).
 
 ## Three releases, three product features
 
 | Release | What changes | What it shows |
 |---|---|---|
-| `v1` | The three nearest stations, bikes and docks | Deploy from a GitHub tag: the revision records the commit; scale to zero, cold start |
-| `v2` | Mechanical and electric bikes, walking time, a recommendation, and an in-instance cache (station list 1 h, availability 30 s): about 450 ms per call becomes about 1 ms on a warm instance | Canary at 10 %, then Promote; a faster release you can measure in the answer (`fetchMs`, `cache`) |
+| `v1` | A page with the three nearest stations, bikes and docks. Every call waits for the Velib' feed: usually 0.2 s, sometimes 5 to 6 s (the open data feed is erratic) | Deploy from a GitHub tag: the revision records the commit; scale to zero, cold start |
+| `v2` | Mechanical and electric bikes, walking time, a recommendation, and an in-instance cache (station list 1 h, availability 30 s): the wait for the feed (0.2 to 6 s) becomes about 1 ms on a warm instance | Canary at 10 %, then Promote; a faster release you can measure in the answer (`fetchMs`, `cache`) |
 | `v3` | "Simpler bike type parsing" with a real bug: it reads a list as a dict, every call fails | Automatic rollback: as a 10 % canary its error rate passes the 5 % threshold and the platform sends all traffic back to v2 on its own (status OUT_OF_SYNC) |
 
 `v1` and `v2` are on `main`. `v3` lives on the branch `release/v3` so that
@@ -34,7 +35,8 @@ scripts/play-demo.sh
 |---|---|
 | `scripts/release-deploy.sh <tag> [--canary PCT \| --full] [--threshold PCT]` | Deploys a tag as a new revision |
 | `scripts/traffic.sh promote \| rollback <rev> \| status` | Changes traffic only (no new revision); `status` shows declared and effective traffic |
-| `scripts/watch.sh <url> [s] [rate]` | Steady traffic plus a live split per release and HTTP status. The platform needs requests to compute an error rate |
+| `scripts/watch.sh <url> [s] [rate]` | Steady traffic (default 2 calls/s) plus a live line over the last 20 s: split per release and HTTP status, client p95. The platform needs requests to compute an error rate |
+| `scripts/probe.sh <url> [n]` | One line per call: time seen by the client next to the wait for the Velib' feed (`fetchMs`) and the cache state |
 | `scripts/play-demo.sh` | The whole sequence with a pause between steps |
 
 After an automatic rollback, acknowledge it by pinning v2 (`traffic.sh

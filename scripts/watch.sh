@@ -12,6 +12,8 @@ set -euo pipefail
 url="${1:?usage: watch.sh <url> [seconds] [rate]}"; dur="${2:-60}"; rate="${3:-2}"
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 end=$(( $(date +%s) + dur )); total=0; window=$(( rate * 20 ))
+# The function answers a page that embeds its data, or JSON (?format=json).
+page_data() { sed -n -e 's/.*<script type="application\/json" id="data">\(.*\)<\/script>.*/\1/p' -e t -e '/^{/p'; }
 tmp="$(mktemp)"; trap 'rm -f "$tmp"; echo' EXIT
 while (( $(date +%s) < end )); do
   for _ in $(seq 1 "$rate"); do
@@ -20,7 +22,7 @@ while (( $(date +%s) < end )); do
       code="${last%% *}"; secs="${last##* }"
       # No HTTP answer: tell a 10 s timeout from a refused or cut connection.
       case "$rc" in 0) ;; 28) code="timeout" ;; *) code="curl-error-$rc" ;; esac
-      rel="$(jq -r '.release // "?"' <<<"$body" 2>/dev/null || echo "?")"
+      rel="$(page_data <<<"$body" | jq -r '.release // "?"' 2>/dev/null || echo "?")"
       echo "$code ${rel:-?} ${secs:-10}" >> "$tmp"; } &
   done
   wait
