@@ -67,12 +67,9 @@ def _cached(url: str, ttl: int) -> tuple[dict, str]:
 
 
 def _bike_types(status: dict) -> dict:
-    """GBFS gives a list of single-key dicts: [{"mechanical": 20}, {"ebike": 1}]."""
-    types = {"mechanical": 0, "ebike": 0}
-    for item in status.get("num_bikes_available_types") or []:
-        for kind, count in item.items():
-            types[kind] = types.get(kind, 0) + count
-    return types
+    """Mechanical and electric bikes at a station."""
+    types = status.get("num_bikes_available_types") or {}
+    return {"mechanical": types.get("mechanical", 0), "ebike": types.get("ebike", 0)}
 
 
 def _plural(n: int, one: str, many: str) -> str:
@@ -133,6 +130,7 @@ def _guide() -> dict:
         "release": _env("SUMMIT_RELEASE", "dev"),
         "place": _env("SUMMIT_NAME", "Carrousel du Louvre"),
         "recommendation": _recommend(stations),
+        "ebikesNearby": sum(st["bikeTypes"]["ebike"] for st in stations),
         "stations": stations,
         "source": "Velib' Metropole open data (GBFS)",
         "cache": {"stationInformation": info_cache, "stationStatus": status_cache},
